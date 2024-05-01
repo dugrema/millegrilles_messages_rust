@@ -1,4 +1,5 @@
 use std::sync::Arc;
+
 use log::{info, warn};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::certificats::ValidateurX509;
@@ -12,31 +13,36 @@ use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::middleware::{Middleware, MiddlewareMessages};
-use millegrilles_common_rust::tokio;
-use millegrilles_common_rust::tokio::spawn;
-use millegrilles_common_rust::tokio::task::JoinHandle;
-use millegrilles_common_rust::static_cell::StaticCell;
-
 use millegrilles_common_rust::middleware_db_v2::preparer as preparer_middleware;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::rabbitmq_dao::QueueType;
 use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
+use millegrilles_common_rust::static_cell::StaticCell;
+use millegrilles_common_rust::tokio;
+use millegrilles_common_rust::tokio::spawn;
 use millegrilles_common_rust::tokio::sync::mpsc;
 use millegrilles_common_rust::tokio::sync::mpsc::Receiver;
+use millegrilles_common_rust::tokio::task::JoinHandle;
+use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::TraiterTransaction;
-use crate::config_ressources::{preparer_index_mongodb_messages, preparer_queues};
 
+use crate::commandes::consommer_commande;
+use crate::config_ressources::{preparer_index_mongodb_messages, preparer_queues};
 use crate::constantes as Constantes;
 use crate::constantes::{COLLECTION_NOM, COLLECTION_RECEPTION_NOM, COLLECTION_USAGERS_NOM, DOMAINE_NOM};
+use crate::evenements::consommer_evenement;
+use crate::requetes::consommer_requete;
+use crate::transactions::aiguillage_transaction;
 
 static GESTIONNAIRE: StaticCell<GestionnaireDomaineMessages> = StaticCell::new();
 
 
 pub async fn run() {
 
-    let middleware = preparer_middleware().expect("preparer middleware");
-    let gestionnaire = initialiser(middleware).await.expect("initialiser domaine");
+    let (middleware, futures_middleware) = preparer_middleware().expect("preparer middleware");
+    let (gestionnaire, futures_domaine) = initialiser(middleware).await
+        .expect("initialiser domaine");
 
     // Tester connexion redis
     if let Some(redis) = middleware.redis.as_ref() {
@@ -48,24 +54,43 @@ pub async fn run() {
         }
     }
 
-    // Creer threads de traitement
-    spawn_threads(gestionnaire, middleware).await.expect("spawn threads domaine messages");
+    // Combiner les JoinHandles recus
+    let mut futures = FuturesUnordered::new();
+    futures.extend(futures_middleware);
+    futures.extend(futures_domaine);
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(45)).await;
+    // Demarrer thread d'entretien.
+    futures.push(spawn(thread_entretien(gestionnaire, middleware)));
 
-    // // ** Thread d'entretien **
-    // futures.push(spawn(entretien(middleware.clone())));
-    //
-    // // Thread ecoute et validation des messages
-    // info!("domaines_maitredescles.build Ajout {} futures dans middleware_hooks", futures.len());
-    // for f in middleware_hooks.futures {
-    //     futures.push(f);
-    // }
-    //
-    // futures
+    // Le "await" maintien l'application ouverte. Des qu'une task termine, l'application arrete.
+    futures.next().await;
+
+    for f in &futures {
+        f.abort()
+    }
+
+    info!("domaine_messages Attendre {} tasks restantes", futures.len());
+    while futures.len() > 0 {
+        futures.next().await;
+    }
+
+    info!("domaine_messages Fin execution");
 }
 
-async fn initialiser<M>(middleware: &'static M) -> Result<&'static GestionnaireDomaineMessages, Error>
+async fn thread_entretien<M>(_gestionnaire: &GestionnaireDomaineMessages, _middleware: &M)
+    where M: Middleware
+{
+    loop {
+        // Effectuer entretien
+
+        // Sleep
+        tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+    }
+}
+
+/// Initialise le gestionnaire. Retourne les spawned tasks dans une liste de futures
+/// (peut servir a canceller).
+async fn initialiser<M>(middleware: &'static M) -> Result<(&'static GestionnaireDomaineMessages, FuturesUnordered<JoinHandle<()>>), Error>
     where M: Middleware
 {
     let gestionnaire = GestionnaireDomaineMessages {};
@@ -80,14 +105,7 @@ async fn initialiser<M>(middleware: &'static M) -> Result<&'static GestionnaireD
     preparer_index_mongodb_messages(middleware, gestionnaire).await
         .expect("preparer_index_mongodb_messages");
 
-    Ok(gestionnaire)
-}
-
-async fn spawn_threads<M>(gestionnaire: &'static GestionnaireDomaineMessages, middleware: &'static M)
-    -> Result<(), Error>
-    where M: MongoDao
-{
-    Ok(())
+    Ok((gestionnaire, futures))
 }
 
 #[derive(Clone)]
@@ -95,8 +113,11 @@ pub struct GestionnaireDomaineMessages {}
 
 #[async_trait]
 impl GestionnaireDomaineSimple for GestionnaireDomaineMessages {
-    async fn aiguillage_transaction<M>(&self, middleware: &M, transaction: TransactionValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Error> where M: ValidateurX509 + GenerateurMessages + MongoDao {
-        todo!()
+    async fn aiguillage_transaction<M>(&self, middleware: &M, transaction: TransactionValide)
+        -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+        where M: ValidateurX509 + GenerateurMessages + MongoDao
+    {
+        aiguillage_transaction(self, middleware, transaction).await
     }
 }
 
@@ -133,29 +154,24 @@ impl GestionnaireBusMillegrilles for GestionnaireDomaineMessages {
 
 #[async_trait]
 impl ConsommateurMessagesBus for GestionnaireDomaineMessages {
-    async fn consommer_messages<M>(&self, middleware: &M, rx: Receiver<TypeMessage>) where M: MiddlewareMessages {
-        todo!()
-    }
-
-    async fn consommer_requete<M>(&self, middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Error> where M: MiddlewareMessages {
-        todo!()
-    }
-
-    async fn consommer_commande<M>(&self, middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Error> where M: MiddlewareMessages {
-        todo!()
-    }
-
-    async fn consommer_evenement<M>(&self, middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Error> where M: MiddlewareMessages {
-        todo!()
-    }
-}
-
-#[async_trait]
-impl TraiterTransaction for GestionnaireDomaineMessages {
-    async fn appliquer_transaction<M>(&self, middleware: &M, transaction: TransactionValide)
+    async fn consommer_requete<M>(&self, middleware: &M, message: MessageValide)
         -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
-        where M: ValidateurX509 + GenerateurMessages + MongoDao
+        where M: MiddlewareMessages
     {
-        todo!()
+        consommer_requete(self, middleware, message).await
+    }
+
+    async fn consommer_commande<M>(&self, middleware: &M, message: MessageValide)
+        -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+        where M: MiddlewareMessages
+    {
+        consommer_commande(self, middleware, message).await
+    }
+
+    async fn consommer_evenement<M>(&self, middleware: &M, message: MessageValide)
+        -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+        where M: MiddlewareMessages
+    {
+        consommer_evenement(self, middleware, message).await
     }
 }
