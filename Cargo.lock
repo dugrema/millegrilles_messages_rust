@@ -559,9 +559,9 @@ checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
 
 [[package]]
 name = "base64"
-version = "0.22.0"
+version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9475866fec1451be56a3c2400fd081ff546538961565ccb5b7142cbd22bc7a51"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "base64-url"
@@ -826,9 +826,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.0.95"
+version = "1.0.96"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d32a725bc159af97c3e629873bb9f88fb8cf8a4867175f76dc987815ea07c83b"
+checksum = "065a29261d53ba54260972629f9ca6bffa69bac13cd1fed61420f7fa68b9f8bd"
 dependencies = [
  "jobserver",
  "libc",
@@ -2473,15 +2473,15 @@ checksum = "6c8640c5d730cb13ebd907d8d04b52f55ac9a2eec55b440c8892f40d56c76c1d"
 
 [[package]]
 name = "millegrilles_common_rust"
-version = "2024.4.0"
-source = "git+https://github.com/dugrema/millegrilles_common_rust.git?branch=2024.4#0d383f10b5ab63fefa32788df37511efe0c6e320"
+version = "2024.4.1"
+source = "git+https://github.com/dugrema/millegrilles_common_rust.git?branch=2024.4#28ff60363b61514bd2a80c0a2b31f5137f53021a"
 dependencies = [
  "async-compression",
  "async-recursion",
  "async-std",
  "async-tar",
  "async-trait",
- "base64 0.22.0",
+ "base64 0.22.1",
  "base64-url",
  "blake2",
  "bytes 1.6.0",
@@ -2509,6 +2509,7 @@ dependencies = [
  "serde",
  "serde-helpers",
  "serde_json",
+ "static_cell",
  "substring",
  "tempfile",
  "tokio",
@@ -2524,10 +2525,10 @@ dependencies = [
 
 [[package]]
 name = "millegrilles_cryptographie"
-version = "2024.4.0"
-source = "git+https://github.com/dugrema/millegrilles_cryptographie.git?branch=2024.4#c0bd87a543a7bad73f6ee82321e653bcdfacb665"
+version = "2024.4.1"
+source = "git+https://github.com/dugrema/millegrilles_cryptographie.git?branch=2024.4#986e8c12735ccc7180203f08437b13dbb61e9a8f"
 dependencies = [
- "base64 0.22.0",
+ "base64 0.22.1",
  "blake2",
  "chacha20poly1305",
  "chrono",
@@ -3200,6 +3201,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "portable-atomic"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7170ef9988bc169ba16dd36a7fa041e5c4cbeb6a35b76d4c03daded371eae7c0"
+
+[[package]]
 name = "powerfmt"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3460,7 +3467,7 @@ version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "566cafdd92868e0939d3fb961bd0dc25fcfaaed179291093b3d43e6b3150ea10"
 dependencies = [
- "base64 0.22.0",
+ "base64 0.22.1",
  "bytes 1.6.0",
  "encoding_rs",
  "futures-core",
@@ -3719,7 +3726,7 @@ version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29993a25686778eb88d4189742cd713c9bce943bc54251a33509dc63cbacf73d"
 dependencies = [
- "base64 0.22.0",
+ "base64 0.22.1",
  "rustls-pki-types",
 ]
 
@@ -4154,6 +4161,15 @@ name = "stable_deref_trait"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
+
+[[package]]
+name = "static_cell"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89b0684884a883431282db1e4343f34afc2ff6996fe1f4a1664519b66e14c1e"
+dependencies = [
+ "portable-atomic",
+]
 
 [[package]]
 name = "stringprep"
@@ -4734,9 +4750,9 @@ dependencies = [
 
 [[package]]
 name = "value-bag"
-version = "1.8.1"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74797339c3b98616c009c7c3eb53a0ce41e85c8ec66bd3db96ed132d20cfdee8"
+checksum = "5a84c137d37ab0142f0f2ddfe332651fdbf252e7b7dbb4e67b6c1f1b2e925101"
 
 [[package]]
 name = "vcpkg"
