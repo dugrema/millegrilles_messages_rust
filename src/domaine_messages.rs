@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use log::{info, warn};
+use log::{debug, info, warn};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::certificats::ValidateurX509;
 use millegrilles_common_rust::configuration::ConfigMessages;
@@ -12,14 +12,15 @@ use millegrilles_common_rust::error::Error;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
-use millegrilles_common_rust::middleware::{Middleware, MiddlewareMessages};
+use millegrilles_common_rust::middleware::{charger_certificats_chiffrage, Middleware, MiddlewareMessages};
 use millegrilles_common_rust::middleware_db_v2::preparer as preparer_middleware;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::rabbitmq_dao::QueueType;
 use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
 use millegrilles_common_rust::static_cell::StaticCell;
-use millegrilles_common_rust::tokio;
+use millegrilles_common_rust::{chrono, tokio};
+use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::tokio::spawn;
 use millegrilles_common_rust::tokio::sync::mpsc;
 use millegrilles_common_rust::tokio::sync::mpsc::Receiver;
@@ -40,7 +41,8 @@ static GESTIONNAIRE: StaticCell<GestionnaireDomaineMessages> = StaticCell::new()
 
 pub async fn run() {
 
-    let (middleware, futures_middleware) = preparer_middleware().expect("preparer middleware");
+    let (middleware, futures_middleware) = preparer_middleware()
+        .expect("preparer middleware");
     let (gestionnaire, futures_domaine) = initialiser(middleware).await
         .expect("initialiser domaine");
 
@@ -77,11 +79,29 @@ pub async fn run() {
     info!("domaine_messages Fin execution");
 }
 
-async fn thread_entretien<M>(_gestionnaire: &GestionnaireDomaineMessages, _middleware: &M)
+async fn thread_entretien<M>(_gestionnaire: &GestionnaireDomaineMessages, middleware: &M)
     where M: Middleware
 {
+    let mut prochain_chargement_certificats_maitredescles = Utc::now();
+    let intervalle_chargement_certificats_maitredescles = chrono::Duration::minutes(5);
+
+    // Attendre 5 secondes pour init bus
+    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
     loop {
+        let maintenant = Utc::now();
+
         // Effectuer entretien
+        if prochain_chargement_certificats_maitredescles < maintenant {
+            match charger_certificats_chiffrage(middleware).await {
+                Ok(()) => {
+                    prochain_chargement_certificats_maitredescles = maintenant + intervalle_chargement_certificats_maitredescles;
+                    debug!("domaines_core.entretien Prochain chargement cert maitredescles: {:?}", prochain_chargement_certificats_maitredescles);
+                },
+                Err(e) => warn!("domaines_core.entretien Erreur chargement certificats de maitre des cles : {:?}", e)
+            }
+
+        }
 
         // Sleep
         tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
@@ -156,21 +176,21 @@ impl GestionnaireBusMillegrilles for GestionnaireDomaineMessages {
 impl ConsommateurMessagesBus for GestionnaireDomaineMessages {
     async fn consommer_requete<M>(&self, middleware: &M, message: MessageValide)
         -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
-        where M: MiddlewareMessages
+        where M: Middleware
     {
         consommer_requete(self, middleware, message).await
     }
 
     async fn consommer_commande<M>(&self, middleware: &M, message: MessageValide)
         -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
-        where M: MiddlewareMessages
+        where M: Middleware
     {
         consommer_commande(self, middleware, message).await
     }
 
     async fn consommer_evenement<M>(&self, middleware: &M, message: MessageValide)
         -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
-        where M: MiddlewareMessages
+        where M: Middleware
     {
         consommer_evenement(self, middleware, message).await
     }

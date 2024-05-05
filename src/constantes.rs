@@ -8,6 +8,7 @@ pub const QUEUE_VOLATILS_NOM: &str = "Messages/volatils";
 pub const QUEUE_TRIGGERS_NOM: &str = "Messages/triggers";
 
 pub const REQUETE_LISTE_MESSAGES: &str = "listeMessages";
+pub const REQUETE_CLE_CHIFFRAGE: &str = "cleChiffrage";
 pub const REQUETE_MESSAGES_PAR_ID: &str = "messagesParId";
 pub const REQUETE_RECLAMATIONS: &str = "reclamations";
 
