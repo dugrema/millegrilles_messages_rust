@@ -57,7 +57,7 @@ impl TransactionRecevoirMessage {
     }
 }
 
-async fn transaction_poster_v1<M>(gestionnaire: &GestionnaireDomaineMessages, middleware: &M, transaction: TransactionValide)
+async fn transaction_poster_v1<M>(_gestionnaire: &GestionnaireDomaineMessages, middleware: &M, transaction: TransactionValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: MongoDao
 {

@@ -1,39 +1,36 @@
 use std::collections::{HashMap, HashSet};
 use std::str::from_utf8;
+
 use log::{debug, error, warn};
-use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::{constantes as CommonConstantes, serde_json};
-use millegrilles_common_rust::constantes::{COMMANDE_AJOUTER_CLE_DOMAINES, DELEGATION_GLOBALE_PROPRIETAIRE, DOMAINE_NOM_MAITREDESCLES, DOMAINE_NOM_MAITREDESCOMPTES, MAITREDESCLES_REQUETE_DECHIFFRAGE_MESSAGE, MAITREDESCLES_REQUETE_DECHIFFRAGE_V2, RolesCertificats, Securite};
-use millegrilles_common_rust::error::Error;
-use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
-use millegrilles_common_rust::middleware::{MiddlewareMessages, sauvegarder_traiter_transaction_serializable, sauvegarder_traiter_transaction_serializable_v2};
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
-use millegrilles_common_rust::mongo_dao::{MongoDao, opt_chrono_datetime_as_bson_datetime};
-use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
-use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
-use millegrilles_common_rust::base64::{engine::general_purpose::STANDARD_NO_PAD as base64_nopad, Engine as _};
+use millegrilles_common_rust::base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD as base64_nopad};
 use millegrilles_common_rust::bson::doc;
+use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chiffrage_cle::CommandeAjouterCleDomaine;
 use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::common_messages::{ReponseRequeteDechiffrageV2, RequeteDechiffrage};
+use millegrilles_common_rust::constantes::{COMMANDE_AJOUTER_CLE_DOMAINES, DELEGATION_GLOBALE_PROPRIETAIRE, DOMAINE_NOM_MAITREDESCLES, DOMAINE_NOM_MAITREDESCOMPTES, MAITREDESCLES_REQUETE_DECHIFFRAGE_MESSAGE, MAITREDESCLES_REQUETE_DECHIFFRAGE_V2, RolesCertificats, Securite};
 use millegrilles_common_rust::dechiffrage::DataChiffre;
+use millegrilles_common_rust::error::Error;
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::messages_generiques::ReponseCommande;
-use millegrilles_common_rust::millegrilles_cryptographie::chiffrage::CleSecreteMgs4;
-use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::{Cipher, CleChiffrage, CleChiffrageHandler};
+use millegrilles_common_rust::middleware::sauvegarder_traiter_transaction_serializable_v2;
+use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::{Cipher, CleChiffrageHandler};
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_mgs4::{CipherMgs4, CleSecreteCipher};
-use millegrilles_common_rust::millegrilles_cryptographie::ed25519_dalek::SigningKey;
-use millegrilles_common_rust::millegrilles_cryptographie::maitredescles::{generer_cle_avec_ca, SignatureDomaines};
+use millegrilles_common_rust::millegrilles_cryptographie::maitredescles::generer_cle_avec_ca;
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::optionepochseconds;
 use millegrilles_common_rust::millegrilles_cryptographie::x25519::CleSecreteX25519;
 use millegrilles_common_rust::millegrilles_cryptographie::x509::EnveloppeCertificat;
-use millegrilles_common_rust::mongodb::Collection;
+use millegrilles_common_rust::mongo_dao::{MongoDao, opt_chrono_datetime_as_bson_datetime};
 use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, ReturnDocument};
+use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
+use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
 use millegrilles_common_rust::tokio_stream::StreamExt;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::optionepochseconds;
-
 use serde::{Deserialize, Serialize};
 
 use crate::constantes;
-use crate::constantes::{COLLECTION_NOM, COLLECTION_USAGERS_NOM, DOMAINE_NOM};
+use crate::constantes::{COLLECTION_USAGERS_NOM, DOMAINE_NOM};
 use crate::domaine_messages::GestionnaireDomaineMessages;
 use crate::transactions::TransactionRecevoirMessage;
 
@@ -175,7 +172,14 @@ async fn commande_poster_v1<M>(gestionnaire: &GestionnaireDomaineMessages, middl
         }
     };
 
-    // Generer la transaction
+    let nombre_profils = profils.len();
+    if nombre_profils == 0 {
+        debug!("Message recu n'a aucun destinataire correspondant");
+        let reponse = ReponseCommandePoster { ok: true, code: Some(1), err: Some("Destinataires inconnus".to_string()) };
+        return Ok(Some(middleware.build_reponse(&reponse)?.0))
+    }
+
+    // Generer la transaction pour chaque profil usager
     for profil in profils {
         let cle_id = match profil.cle_id {
             Some(inner) => inner,
@@ -194,7 +198,14 @@ async fn commande_poster_v1<M>(gestionnaire: &GestionnaireDomaineMessages, middl
         sauvegarder_message(gestionnaire, middleware, profil.user_id.as_str(), cle_id, cle_secrete, &resultat).await?;
     }
 
-    let reponse = ReponseCommandePoster { ok: true, code: Some(201), err: None };
+    let (code, err) = if destinataire_manquants.len() > 0 {
+        (200, Some(format!("Message traite pour {} destinataires. {} destinataires sont inconnus",
+                           nombre_profils, destinataire_manquants.len())))
+    } else {
+        (201, None)
+    };
+
+    let reponse = ReponseCommandePoster { ok: true, code: Some(code), err };
     Ok(Some(middleware.build_reponse(&reponse)?.0))
 }
 
@@ -248,9 +259,9 @@ struct ProfilUsagerMessages {
     /// Reset automatiquement regulierement pour generer une nouvelle cle.
     cle_id: Option<String>,
 
-    /// Date du dernier reset de nom_usager et cle_id
-    #[serde(default, skip_serializing_if="Option::is_none", with="opt_chrono_datetime_as_bson_datetime")]
-    dernier_reset: Option<DateTime<Utc>>,
+    // /// Date du dernier reset de nom_usager et cle_id
+    //#[serde(default, skip_serializing_if="Option::is_none", with="opt_chrono_datetime_as_bson_datetime")]
+    //dernier_reset: Option<DateTime<Utc>>,
 }
 
 #[derive(Serialize)]
@@ -434,7 +445,7 @@ async fn get_profils_usagers<M,S>(middleware: &M, noms_usagers: &Vec<S>)
 }
 
 enum FiltreUsagerChamp<S> where S: ToString {
-    UserId(Vec<S>),
+    // UserId(Vec<S>),
     NomUsager(Vec<S>),
 }
 
@@ -443,10 +454,10 @@ async fn find_usagers_messages<M,S>(middleware: &M, usagers: FiltreUsagerChamp<S
     where M: MongoDao, S: ToString
 {
     let (filtre, nombre_usagers) = match usagers {
-        FiltreUsagerChamp::UserId(u) => {
-            let liste: Vec<String> = u.iter().map(|s|s.to_string()).collect();
-            (doc! {"user_id":{"$in": liste}}, u.len())
-        }
+        // FiltreUsagerChamp::UserId(u) => {
+        //     let liste: Vec<String> = u.iter().map(|s|s.to_string()).collect();
+        //     (doc! {"user_id":{"$in": liste}}, u.len())
+        // }
         FiltreUsagerChamp::NomUsager(u) => {
             let liste: Vec<String> = u.iter().map(|s|s.to_string()).collect();
             (doc! {"nom_usager":{"$in": liste}}, u.len())
@@ -477,10 +488,16 @@ struct ReponseDechiffrageMessage {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct MessagePostV1 {
+    /// Contenu HTML du message
     contenu: String,
+    /// Liste de destinataires (noms usagers)
     destinataires: Vec<String>,
+    /// Information pour repondre au message.
     #[serde(skip_serializing_if="Option::is_none")]
     reply_to: Option<String>,
+    /// Date de creation du message du point de vue de l'origine
     #[serde(default, skip_serializing_if="Option::is_none", with="optionepochseconds")]
     date_post: Option<DateTime<Utc>>,
+    /// Information non structuree sur l'origine du message.
+    origine: Option<String>,
 }
