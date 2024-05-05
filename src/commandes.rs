@@ -2,11 +2,11 @@ use std::collections::{HashMap, HashSet};
 use std::str::from_utf8;
 use log::{debug, error, warn};
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
-use millegrilles_common_rust::constantes as CommonConstantes;
+use millegrilles_common_rust::{constantes as CommonConstantes, serde_json};
 use millegrilles_common_rust::constantes::{COMMANDE_AJOUTER_CLE_DOMAINES, DELEGATION_GLOBALE_PROPRIETAIRE, DOMAINE_NOM_MAITREDESCLES, DOMAINE_NOM_MAITREDESCOMPTES, MAITREDESCLES_REQUETE_DECHIFFRAGE_MESSAGE, MAITREDESCLES_REQUETE_DECHIFFRAGE_V2, RolesCertificats, Securite};
 use millegrilles_common_rust::error::Error;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
-use millegrilles_common_rust::middleware::MiddlewareMessages;
+use millegrilles_common_rust::middleware::{MiddlewareMessages, sauvegarder_traiter_transaction_serializable, sauvegarder_traiter_transaction_serializable_v2};
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
 use millegrilles_common_rust::mongo_dao::{MongoDao, opt_chrono_datetime_as_bson_datetime};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
@@ -16,9 +16,11 @@ use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::chiffrage_cle::CommandeAjouterCleDomaine;
 use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::common_messages::{ReponseRequeteDechiffrageV2, RequeteDechiffrage};
+use millegrilles_common_rust::dechiffrage::DataChiffre;
 use millegrilles_common_rust::messages_generiques::ReponseCommande;
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage::CleSecreteMgs4;
-use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
+use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::{Cipher, CleChiffrage, CleChiffrageHandler};
+use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_mgs4::{CipherMgs4, CleSecreteCipher};
 use millegrilles_common_rust::millegrilles_cryptographie::ed25519_dalek::SigningKey;
 use millegrilles_common_rust::millegrilles_cryptographie::maitredescles::{generer_cle_avec_ca, SignatureDomaines};
 use millegrilles_common_rust::millegrilles_cryptographie::x25519::CleSecreteX25519;
@@ -26,12 +28,14 @@ use millegrilles_common_rust::millegrilles_cryptographie::x509::EnveloppeCertifi
 use millegrilles_common_rust::mongodb::Collection;
 use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, ReturnDocument};
 use millegrilles_common_rust::tokio_stream::StreamExt;
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::optionepochseconds;
 
 use serde::{Deserialize, Serialize};
 
 use crate::constantes;
 use crate::constantes::{COLLECTION_NOM, COLLECTION_USAGERS_NOM, DOMAINE_NOM};
 use crate::domaine_messages::GestionnaireDomaineMessages;
+use crate::transactions::TransactionRecevoirMessage;
 
 pub async fn consommer_commande<M>(gestionnaire: &GestionnaireDomaineMessages, middleware: &M, message: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
@@ -94,7 +98,7 @@ struct ReponseCommandePoster {
 
 async fn commande_poster_v1<M>(gestionnaire: &GestionnaireDomaineMessages, middleware: &M, message: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
-    where M: GenerateurMessages + MongoDao + CleChiffrageHandler
+    where M: GenerateurMessages + MongoDao + CleChiffrageHandler + ValidateurX509
 {
     let message_ref = message.message.parse()?;
 
@@ -162,7 +166,7 @@ async fn commande_poster_v1<M>(gestionnaire: &GestionnaireDomaineMessages, middl
     debug!("commande_poster_v1 Message dechiffre recu :\n{:?}", resultat);
 
     // Recuperer profil de l'usager. Generer au besoin.
-    let profil = match get_profils_usagers(middleware, &resultat.destinataires).await {
+    let (profils, mut cles_chiffrage, destinataire_manquants) = match get_profils_usagers(middleware, &resultat.destinataires).await {
         Ok(inner) => inner,
         Err(e) => {
             error!("commande_poster_v1 Erreur get_profils_usagers : {:?}", e);
@@ -172,10 +176,64 @@ async fn commande_poster_v1<M>(gestionnaire: &GestionnaireDomaineMessages, middl
     };
 
     // Generer la transaction
-
+    for profil in profils {
+        let cle_id = match profil.cle_id {
+            Some(inner) => inner,
+            None => {
+                error!("commande_poster_v1 Cle_id de chiffrage manquante pour profil {}, skip destinataire", profil.user_id);
+                continue
+            }
+        };
+        let cle_secrete = match cles_chiffrage.remove(&cle_id) {
+            Some(inner) => inner,
+            None => {
+                error!("commande_poster_v1 Cle de chiffrage manquante pour profil {}, skip destinataire", profil.user_id);
+                continue
+            }
+        };
+        sauvegarder_message(gestionnaire, middleware, profil.user_id.as_str(), cle_id, cle_secrete, &resultat).await?;
+    }
 
     let reponse = ReponseCommandePoster { ok: true, code: Some(201), err: None };
     Ok(Some(middleware.build_reponse(&reponse)?.0))
+}
+
+async fn sauvegarder_message<M,S,K>(gestionnaire: &GestionnaireDomaineMessages, middleware: &M,
+                                    user_id: S, cle_id: K, cle_secrete: CleSecreteX25519,
+                                    message: &MessagePostV1
+)
+    -> Result<(), Error>
+    where M: GenerateurMessages + ValidateurX509 + MongoDao, S: ToString, K: ToString
+{
+    let mut cipher = CipherMgs4::with_secret(CleSecreteCipher::CleSecrete(cle_secrete))?;
+    let message_bytes = serde_json::to_string(&message)?;
+    let taille_chiffrage = (message_bytes.len() as f64 * 1.05 + 17f64) as usize;
+    let mut buffer = Vec::with_capacity(taille_chiffrage);
+    buffer.resize(taille_chiffrage, 0u8);
+    let taille_contenu = cipher.update(message_bytes.as_bytes(), buffer.as_mut_slice())?;
+    let resultat_chiffrage = cipher.finalize(&mut buffer[taille_contenu..])?;
+
+    // Tronquer le buffer pour garder la taille exacte
+    buffer.truncate(taille_contenu + resultat_chiffrage.len);
+
+    let info_dechiffrage = resultat_chiffrage.cles;
+    let format_chiffrage: &str = info_dechiffrage.format.into();
+
+    let message_chiffre = DataChiffre {
+        data_chiffre: base64_nopad.encode(buffer),
+        format: Some(format_chiffrage.to_string()),
+        cle_id: Some(cle_id.to_string()),
+        nonce: info_dechiffrage.nonce,
+        verification: info_dechiffrage.verification,
+        // Champs obsolete
+        header: None, ref_hachage_bytes: None, hachage_bytes: None,
+    };
+
+    let transaction_message = TransactionRecevoirMessage::new(user_id, message_chiffre);
+    sauvegarder_traiter_transaction_serializable_v2(middleware, &transaction_message, gestionnaire,
+        DOMAINE_NOM, constantes::COMMANDE_POSTER_V1).await?;
+
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -206,7 +264,7 @@ struct ReponseUsersMaitredescomptes {
 }
 
 async fn get_profils_usagers<M,S>(middleware: &M, noms_usagers: &Vec<S>)
-    -> Result<(Vec<ProfilUsagerMessages>, Vec<String>), Error>
+    -> Result<(Vec<ProfilUsagerMessages>, HashMap<String, CleSecreteX25519>, Vec<String>), Error>
     where
         M: MongoDao + GenerateurMessages + CleChiffrageHandler,
         S: AsRef<str>
@@ -246,7 +304,7 @@ async fn get_profils_usagers<M,S>(middleware: &M, noms_usagers: &Vec<S>)
                                     Err(Error::Str("get_profils_usagers Mauvais nombre de cles dechiffrees recues"))?
                                 }
                                 let cle = inner.remove(0);
-                                cles_chiffrage.insert(p.user_id.clone(), cle.cle_secrete()?)
+                                cles_chiffrage.insert(cle_id.to_owned(), cle.cle_secrete()?)
                             },
                             None => Err(Error::Str("get_profils_usagers Aucunes cles dechiffrees recues"))?
                         };
@@ -348,21 +406,21 @@ async fn get_profils_usagers<M,S>(middleware: &M, noms_usagers: &Vec<S>)
                     let cle_id = signature_domaines.get_cle_ref()?.to_string();
                     let filtre = doc!{"user_id": &p.user_id};
                     let ops = doc! {
-                        "$set": {"cle_id": cle_id},
+                        "$set": {"cle_id": &cle_id},
                         "$currentDate": {CommonConstantes::CHAMP_MODIFICATION: true}
                     };
                     let collection = middleware.get_collection(COLLECTION_USAGERS_NOM)?;
                     if collection.update_one(filtre, ops, None).await?.modified_count != 1 {
                         Err(Error::String(format!("get_profils_usagers Erreur sauvegarde cle_id pour profil {} - SKIP", p.user_id)))?
                     }
+                    p.cle_id = Some(cle_id.clone());
+                    cles_chiffrage.insert(cle_id, cle.secret);
                 } else {
                     Err(Error::String(format!("get_profils_usagers Erreur sauvegarde cle aupres du maitre des cles : {:?}", reponse_etat)))?
                 }
             } else {
                 Err(Error::Str("get_profils_usagers Erreur sauvegarde nouvelle cle profil aupres du maitre des cles"))?
             }
-
-            cles_chiffrage.insert(p.user_id.clone(), cle.secret);
         }
     }
 
@@ -372,7 +430,7 @@ async fn get_profils_usagers<M,S>(middleware: &M, noms_usagers: &Vec<S>)
 
     debug!("Generer les transactions de nouveau message pour {} destinataire(s)", profils.len());
 
-    Ok((profils, manquants.iter().map(|s| s.to_string()).collect()))
+    Ok((profils, cles_chiffrage, manquants.iter().map(|s| s.to_string()).collect()))
 }
 
 enum FiltreUsagerChamp<S> where S: ToString {
@@ -417,9 +475,12 @@ struct ReponseDechiffrageMessage {
     cle_secrete_base64: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct MessagePostV1 {
     contenu: String,
     destinataires: Vec<String>,
+    #[serde(skip_serializing_if="Option::is_none")]
     reply_to: Option<String>,
+    #[serde(default, skip_serializing_if="Option::is_none", with="optionepochseconds")]
+    date_post: Option<DateTime<Utc>>,
 }

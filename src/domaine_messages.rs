@@ -6,7 +6,7 @@ use millegrilles_common_rust::certificats::ValidateurX509;
 use millegrilles_common_rust::configuration::ConfigMessages;
 use millegrilles_common_rust::db_structs::TransactionValide;
 use millegrilles_common_rust::domaines::{GestionnaireDomaine, GestionnaireMessages};
-use millegrilles_common_rust::domaines_traits::{ConsommateurMessagesBus, GestionnaireBusMillegrilles, GestionnaireDomaineV2};
+use millegrilles_common_rust::domaines_traits::{AiguillageTransactions, ConsommateurMessagesBus, GestionnaireBusMillegrilles, GestionnaireDomaineV2};
 use millegrilles_common_rust::domaines_v2::GestionnaireDomaineSimple;
 use millegrilles_common_rust::error::Error;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
@@ -132,14 +132,17 @@ async fn initialiser<M>(middleware: &'static M) -> Result<(&'static Gestionnaire
 pub struct GestionnaireDomaineMessages {}
 
 #[async_trait]
-impl GestionnaireDomaineSimple for GestionnaireDomaineMessages {
+impl AiguillageTransactions for GestionnaireDomaineMessages {
     async fn aiguillage_transaction<M>(&self, middleware: &M, transaction: TransactionValide)
-        -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+                                       -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
         where M: ValidateurX509 + GenerateurMessages + MongoDao
     {
         aiguillage_transaction(self, middleware, transaction).await
     }
 }
+
+#[async_trait]
+impl GestionnaireDomaineSimple for GestionnaireDomaineMessages {}
 
 impl GestionnaireDomaineV2 for GestionnaireDomaineMessages {
     fn get_collection_transactions(&self) -> Option<String> {
