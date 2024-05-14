@@ -4,16 +4,16 @@ use millegrilles_common_rust::error::Error;
 use millegrilles_common_rust::mongo_dao::MongoDao;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType};
 
-use crate::constantes::{COMMANDE_ASSOCIER_IMAGES, COMMANDE_ASSOCIER_VIDEOS, COMMANDE_MESSAGE_LU, COMMANDE_POSTER_V1, COMMANDE_SUPPRIMER_MESSAGE, DOMAINE_NOM, QUEUE_VOLATILS_NOM, REQUETE_CLE_CHIFFRAGE, REQUETE_LISTE_MESSAGES, REQUETE_MESSAGES_PAR_ID, REQUETE_RECLAMATIONS};
+use crate::constantes::{COMMANDE_ASSOCIER_IMAGES, COMMANDE_ASSOCIER_VIDEOS, COMMANDE_MESSAGE_LU, COMMANDE_POSTER_V1, COMMANDE_SUPPRIMER_MESSAGE, DOMAINE_NOM, QUEUE_VOLATILS_NOM, REQUETE_DECHIFFRER_CLES, REQUETE_MESSAGES_PAR_IDS, REQUETE_RECLAMATIONS, REQUETE_SYNC_MESSAGES};
 use crate::domaine_messages::GestionnaireDomaineMessages;
 
 pub fn preparer_queues() -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
 
     // Requetes
-    rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, REQUETE_CLE_CHIFFRAGE), exchange: Securite::L1Public});
-    rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, REQUETE_LISTE_MESSAGES), exchange: Securite::L2Prive});
-    rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, REQUETE_MESSAGES_PAR_ID), exchange: Securite::L2Prive});
+    rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, REQUETE_DECHIFFRER_CLES), exchange: Securite::L2Prive});
+    rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, REQUETE_SYNC_MESSAGES), exchange: Securite::L2Prive});
+    rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, REQUETE_MESSAGES_PAR_IDS), exchange: Securite::L2Prive});
     rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, REQUETE_RECLAMATIONS), exchange: Securite::L4Secure});
 
     // Commandes

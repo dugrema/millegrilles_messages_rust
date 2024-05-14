@@ -10,6 +10,7 @@ mod commandes;
 mod requetes;
 mod evenements;
 mod transactions;
+mod structures_messages;
 
 fn main() {
     env_logger::init();
