@@ -17,5 +17,9 @@ pub const COMMANDE_SUPPRIMER_MESSAGE: &str = "supprimerMessage";
 pub const COMMANDE_ASSOCIER_IMAGES: &str = "associerImages";
 pub const COMMANDE_ASSOCIER_VIDEOS: &str = "associerVideos";
 
+pub const EVENEMENT_NOUVEAU_MESSAGE: &str = "nouveauMessage";
+pub const EVENEMENT_MESSAGE_LU: &str = "messageLu";
+pub const EVENEMENT_MESSAGE_SUPPRIME: &str = "messageSupprime";
+
 
 pub const VERSION_TRANSACTION_MESSAGE_1: u16 = 1;

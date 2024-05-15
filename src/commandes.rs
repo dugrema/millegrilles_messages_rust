@@ -209,6 +209,12 @@ async fn commande_poster_v1<M>(gestionnaire: &GestionnaireDomaineMessages, middl
     Ok(Some(middleware.build_reponse(&reponse)?.0))
 }
 
+#[derive(Serialize)]
+struct EvenementNouveauMessage {
+    message_id: String,
+    user_id: String,
+}
+
 async fn sauvegarder_message<M,S,K>(gestionnaire: &GestionnaireDomaineMessages, middleware: &M,
                                     user_id: S, cle_id: K, cle_secrete: CleSecreteX25519,
                                     message: &MessagePostV1
@@ -240,9 +246,19 @@ async fn sauvegarder_message<M,S,K>(gestionnaire: &GestionnaireDomaineMessages, 
         header: None, ref_hachage_bytes: None, hachage_bytes: None,
     };
 
-    let transaction_message = TransactionRecevoirMessage::new(user_id, message_chiffre);
-    sauvegarder_traiter_transaction_serializable_v2(middleware, &transaction_message, gestionnaire,
+    let user_id = user_id.to_string();
+
+    let transaction_message = TransactionRecevoirMessage::new(&user_id, message_chiffre);
+    let (_, message_id) = sauvegarder_traiter_transaction_serializable_v2(middleware, &transaction_message, gestionnaire,
         DOMAINE_NOM, constantes::COMMANDE_POSTER_V1).await?;
+
+    // Emettre evenement de nouveau message
+    let routage = RoutageMessageAction::builder(
+        DOMAINE_NOM, constantes::EVENEMENT_NOUVEAU_MESSAGE, vec![Securite::L2Prive])
+        .partition(&user_id)
+        .build();
+    let evenement = EvenementNouveauMessage {message_id, user_id};
+    middleware.emettre_evenement(routage, evenement).await?;
 
     Ok(())
 }
