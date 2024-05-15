@@ -287,7 +287,7 @@ struct RequeteUsersMaitredescomptes {
 
 #[derive(Deserialize)]
 struct ReponseUsersMaitredescomptes {
-    usagers: HashMap<String, String>
+    usagers: HashMap<String, Option<String>>
 }
 
 async fn get_profils_usagers<M,S>(middleware: &M, noms_usagers: &Vec<S>)
@@ -363,21 +363,28 @@ async fn get_profils_usagers<M,S>(middleware: &M, noms_usagers: &Vec<S>)
 
             let collection = middleware.get_collection_typed::<ProfilUsagerMessages>(COLLECTION_USAGERS_NOM)?;
             for (nom_usager, user_id) in &reponse_usagers.usagers {
-                let filtre = doc!{"user_id": user_id};
-                let ops = doc! {
-                    "$set": {"nom_usager": nom_usager},
-                    "$currentDate": {CommonConstantes::CHAMP_MODIFICATION: true, "dernier_reset": true},
-                };
-                let options = FindOneAndUpdateOptions::builder()
-                    .upsert(true)
-                    .return_document(ReturnDocument::After)
-                    .build();
-                let profil = match collection.find_one_and_update(filtre, ops, options).await? {
-                    Some(inner) => inner,
-                    None => Err(Error::Str("get_profils_usagers Erreur creation compte profile usager: aucun resultat sur upsert"))?
-                };
-                profils.push(profil);
-                manquants.remove(nom_usager.as_str());
+                match user_id {
+                    Some(user_id) => {
+                        let filtre = doc!{"user_id": user_id};
+                        let ops = doc! {
+                            "$set": {"nom_usager": nom_usager},
+                            "$currentDate": {CommonConstantes::CHAMP_MODIFICATION: true, "dernier_reset": true},
+                        };
+                        let options = FindOneAndUpdateOptions::builder()
+                            .upsert(true)
+                            .return_document(ReturnDocument::After)
+                            .build();
+                        let profil = match collection.find_one_and_update(filtre, ops, options).await? {
+                            Some(inner) => inner,
+                            None => Err(Error::Str("get_profils_usagers Erreur creation compte profile usager: aucun resultat sur upsert"))?
+                        };
+                        profils.push(profil);
+                        manquants.remove(nom_usager.as_str());
+                    },
+                    None => {
+                        // Rien a faire
+                    }
+                }
             }
 
             if manquants.len() > 0 {
@@ -516,4 +523,6 @@ struct MessagePostV1 {
     date_post: Option<DateTime<Utc>>,
     /// Information non structuree sur l'origine du message.
     origine: Option<String>,
+    /// Nom de l'auteur (non authoritative).
+    auteur: Option<String>,
 }
