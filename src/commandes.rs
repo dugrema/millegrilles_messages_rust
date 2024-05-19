@@ -14,7 +14,7 @@ use millegrilles_common_rust::dechiffrage::DataChiffre;
 use millegrilles_common_rust::error::Error;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::messages_generiques::ReponseCommande;
-use millegrilles_common_rust::middleware::sauvegarder_traiter_transaction_serializable_v2;
+use millegrilles_common_rust::middleware::{sauvegarder_traiter_transaction_serializable_v2, sauvegarder_traiter_transaction_v2};
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::{Cipher, CleChiffrageHandler};
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_mgs4::{CipherMgs4, CleSecreteCipher};
 use millegrilles_common_rust::millegrilles_cryptographie::maitredescles::generer_cle_avec_ca;
@@ -30,9 +30,9 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use crate::constantes;
-use crate::constantes::{COLLECTION_USAGERS_NOM, DOMAINE_NOM};
+use crate::constantes::{COLLECTION_RECEPTION_NOM, COLLECTION_USAGERS_NOM, DOMAINE_NOM};
 use crate::domaine_messages::GestionnaireDomaineMessages;
-use crate::transactions::TransactionRecevoirMessage;
+use crate::transactions::{TransactionMarquerLu, TransactionRecevoirMessage, TransactionSupprimerMessage};
 
 pub async fn consommer_commande<M>(gestionnaire: &GestionnaireDomaineMessages, middleware: &M, message: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
@@ -49,7 +49,8 @@ pub async fn consommer_commande<M>(gestionnaire: &GestionnaireDomaineMessages, m
     match action.as_str() {
         // Commandes standard
         constantes::COMMANDE_POSTER_V1 => commande_poster_v1(gestionnaire, middleware, message).await,
-
+        constantes::COMMANDE_MARQUER_LU => commande_marquer_lu(gestionnaire, middleware, message).await,
+        constantes::COMMANDE_SUPPRIMER_MESSAGE => commande_supprimer_message(gestionnaire, middleware, message).await,
         // Commande inconnue
         _ => Err(Error::String(format!("consommer_commande: Commande {} inconnue, **DROPPED**\n{}",
                                        action, from_utf8(message.message.buffer.as_slice())?)))?,
@@ -525,4 +526,90 @@ struct MessagePostV1 {
     origine: Option<String>,
     /// Nom de l'auteur (non authoritative).
     auteur: Option<String>,
+}
+
+async fn commande_marquer_lu<M>(gestionnaire: &GestionnaireDomaineMessages, middleware: &M, message: MessageValide)
+                               -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+    where M: GenerateurMessages + MongoDao + CleChiffrageHandler + ValidateurX509
+{
+    let commande: TransactionMarquerLu = {
+        let message_ref = message.message.parse()?;
+
+        message_ref.contenu()?.deserialize()?
+    };
+
+    let user_id = match message.certificat.get_user_id()? {
+        Some(inner) => inner,
+        None => Err(Error::Str("commande_marquer_lu Certificat sans user_id"))?
+    };
+
+    let message_ids = commande.message_ids;
+
+    // Verifier que l'usager a acces au message et qu'il n'a pas deja lu==true
+    let filtre = doc!{constantes::CHAMP_USER_ID: &user_id, constantes::CHAMP_MESSAGE_ID: {"$in": &message_ids}};
+    let collection = middleware.get_collection(COLLECTION_RECEPTION_NOM)?;
+    let doc_existant = collection.find_one(filtre, None).await?;
+    if doc_existant.is_some() {
+        // Ok, creer la transaction
+        sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire).await?;
+
+        // Emettre evenement de messages suppriems
+        let routage = RoutageMessageAction::builder(
+            DOMAINE_NOM, constantes::EVENEMENT_MESSAGE_LU, vec![Securite::L2Prive])
+            .partition(&user_id)
+            .build();
+        let evenement = EvenementMessagesLu {message_ids, user_id};
+        middleware.emettre_evenement(routage, evenement).await?;
+
+        Ok(Some(middleware.reponse_ok(200, None)?))
+    } else {
+        Ok(Some(middleware.reponse_err(404, None, Some("Message id inconnu ou n'appartient pas a l'usager"))?))
+    }
+}
+
+#[derive(Serialize)]
+struct EvenementMessagesSupprimes {
+    message_ids: Vec<String>,
+    user_id: String,
+}
+
+type EvenementMessagesLu = EvenementMessagesSupprimes;
+
+async fn commande_supprimer_message<M>(gestionnaire: &GestionnaireDomaineMessages, middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+    where M: GenerateurMessages + MongoDao + CleChiffrageHandler + ValidateurX509
+{
+    let commande: TransactionSupprimerMessage = {
+        let message_ref = message.message.parse()?;
+
+        message_ref.contenu()?.deserialize()?
+    };
+
+    let user_id = match message.certificat.get_user_id()? {
+        Some(inner) => inner,
+        None => Err(Error::Str("commande_supprimer_message Certificat sans user_id"))?
+    };
+
+    let message_ids = commande.message_ids;
+
+    // Verifier que l'usager a acces au message et qu'il n'a pas deja lu==true
+    let filtre = doc!{constantes::CHAMP_USER_ID: &user_id, constantes::CHAMP_MESSAGE_ID: {"$in": &message_ids}};
+    let collection = middleware.get_collection(COLLECTION_RECEPTION_NOM)?;
+    let doc_existant = collection.find_one(filtre, None).await?;
+    if doc_existant.is_some() {
+        // Ok, creer la transaction
+        sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire).await?;
+
+        // Emettre evenement de messages suppriems
+        let routage = RoutageMessageAction::builder(
+            DOMAINE_NOM, constantes::EVENEMENT_MESSAGE_SUPPRIME, vec![Securite::L2Prive])
+            .partition(&user_id)
+            .build();
+        let evenement = EvenementMessagesSupprimes {message_ids, user_id};
+        middleware.emettre_evenement(routage, evenement).await?;
+
+        Ok(Some(middleware.reponse_ok(200, None)?))
+    } else {
+        Ok(Some(middleware.reponse_err(404, None, Some("Message id inconnu ou n'appartient pas a l'usager"))?))
+    }
 }

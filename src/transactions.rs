@@ -1,5 +1,5 @@
 use millegrilles_common_rust::bson::doc;
-use millegrilles_common_rust::certificats::ValidateurX509;
+use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::db_structs::TransactionValide;
 use millegrilles_common_rust::dechiffrage::DataChiffre;
@@ -38,6 +38,8 @@ pub async fn aiguillage_transaction<M, T>(gestionnaire: &GestionnaireDomaineMess
 
     match action.as_str() {
         constantes::COMMANDE_POSTER_V1 => transaction_poster_v1(gestionnaire, middleware, transaction).await,
+        constantes::COMMANDE_MARQUER_LU => transaction_marquer_lu(gestionnaire, middleware, transaction).await,
+        constantes::COMMANDE_SUPPRIMER_MESSAGE => transaction_supprimer_message(gestionnaire, middleware, transaction).await,
         _ => Err(format!("transactions.aiguillage_transaction: Transaction {} est de type non gere : {}", transaction.transaction.id, action))?
     }
 }
@@ -81,6 +83,62 @@ async fn transaction_poster_v1<M>(_gestionnaire: &GestionnaireDomaineMessages, m
     let collection = middleware.get_collection(COLLECTION_RECEPTION_NOM)?;
     let options = UpdateOptions::builder().upsert(true).build();
     collection.update_one(filtre, ops, options).await?;
+
+    Ok(None)
+}
+
+#[derive(Deserialize)]
+pub struct TransactionMarquerLu {
+    pub message_ids: Vec<String>,
+}
+
+async fn transaction_marquer_lu<M>(_gestionnaire: &GestionnaireDomaineMessages, middleware: &M, transaction: TransactionValide)
+                                  -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+    where M: MongoDao
+{
+    let message_recu: TransactionMarquerLu = serde_json::from_str(transaction.transaction.contenu.as_str())?;
+
+    let user_id = match transaction.certificat.get_user_id()? {
+        Some(inner) => inner,
+        None => Err(Error::Str("transaction_marquer_lu Certificat sans user_id"))?
+    };
+
+    let message_ids = message_recu.message_ids;
+
+    // Verifier que l'usager a acces au message et qu'il n'a pas deja lu==true
+    let filtre = doc!{constantes::CHAMP_USER_ID: &user_id, constantes::CHAMP_MESSAGE_ID: {"$in": &message_ids}};
+    let ops = doc! {
+        "$set": {"lu": true},
+        "$currentDate": {CommonConstantes::CHAMP_MODIFICATION: true},
+    };
+    let collection = middleware.get_collection(COLLECTION_RECEPTION_NOM)?;
+    collection.update_one(filtre, ops, None).await?;
+
+    Ok(None)
+}
+
+#[derive(Deserialize)]
+pub struct TransactionSupprimerMessage {
+    pub message_ids: Vec<String>,
+}
+
+async fn transaction_supprimer_message<M>(_gestionnaire: &GestionnaireDomaineMessages, middleware: &M, transaction: TransactionValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+    where M: MongoDao
+{
+    let message_recu: TransactionSupprimerMessage = serde_json::from_str(transaction.transaction.contenu.as_str())?;
+
+    let user_id = match transaction.certificat.get_user_id()? {
+        Some(inner) => inner,
+        None => Err(Error::Str("transaction_supprimer_message Certificat sans user_id"))?
+    };
+
+    let message_ids = message_recu.message_ids;
+
+    // Verifier que l'usager a acces au message et qu'il n'a pas deja lu==true
+    let filtre = doc!{constantes::CHAMP_USER_ID: &user_id, constantes::CHAMP_MESSAGE_ID: {"$in": &message_ids}};
+    let collection = middleware.get_collection(COLLECTION_RECEPTION_NOM)?;
+    collection.delete_one(filtre, None).await?;
 
     Ok(None)
 }
