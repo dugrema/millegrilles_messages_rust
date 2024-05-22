@@ -511,6 +511,19 @@ struct ReponseDechiffrageMessage {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+struct MessageFichierV1 {
+    fuuid: String,
+    nom: String,
+    mimetype: String,
+    date_fichier: Option<i64>,
+    taille_dechiffre: Option<i64>,
+    taille_chiffre: i64,
+    cle_id: String,
+    format: String,
+    nonce: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct MessagePostV1 {
     /// Contenu HTML du message
     contenu: String,
@@ -526,6 +539,8 @@ struct MessagePostV1 {
     origine: Option<String>,
     /// Nom de l'auteur (non authoritative).
     auteur: Option<String>,
+    /// Fichiers attaches au message
+    fichiers: Option<Vec<MessageFichierV1>>
 }
 
 async fn commande_marquer_lu<M>(gestionnaire: &GestionnaireDomaineMessages, middleware: &M, message: MessageValide)
