@@ -48,6 +48,7 @@ pub async fn aiguillage_transaction<M, T>(gestionnaire: &GestionnaireDomaineMess
 #[derive(Serialize, Deserialize)]
 pub struct FichierMessage {
     fuuid: String,
+    taille_chiffre: i64,
     cle_id: String,
     format: String,
     #[serde(skip_serializing_if="Option::is_none")]
@@ -60,6 +61,7 @@ impl From<&MessageFichierV1> for FichierMessage {
     fn from(value: &MessageFichierV1) -> Self {
         Self {
             fuuid: value.fuuid.clone(),
+            taille_chiffre: value.taille_chiffre,
             cle_id: value.cle_id.clone(),
             format: value.format.clone(),
             nonce: value.nonce.clone(),
@@ -118,6 +120,7 @@ async fn transaction_poster_v1<M>(_gestionnaire: &GestionnaireDomaineMessages, m
                     "nonce": fichier.nonce,
                     "format": fichier.format,
                     "verification": fichier.verification,
+                    "taille_chiffre": fichier.taille_chiffre,
                     CommonConstantes::CHAMP_CREATION: Utc::now()
                 },
                 "$currentDate": {CommonConstantes::CHAMP_MODIFICATION: true}
