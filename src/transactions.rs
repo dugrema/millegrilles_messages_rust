@@ -179,10 +179,14 @@ async fn transaction_supprimer_message<M>(_gestionnaire: &GestionnaireDomaineMes
 
     let message_ids = message_recu.message_ids;
 
-    // Verifier que l'usager a acces au message et qu'il n'a pas deja lu==true
+    // Supprimer les messages
     let filtre = doc!{constantes::CHAMP_USER_ID: &user_id, constantes::CHAMP_MESSAGE_ID: {"$in": &message_ids}};
     let collection = middleware.get_collection(COLLECTION_RECEPTION_NOM)?;
-    collection.delete_many(filtre, None).await?;
+    collection.delete_many(filtre.clone(), None).await?;
+
+    // Supprimer les fichiers associes au message
+    let collection_fichiers = middleware.get_collection(COLLECTION_FICHIERS_NOM)?;
+    collection_fichiers.delete_many(filtre.clone(), None).await?;
 
     Ok(None)
 }
