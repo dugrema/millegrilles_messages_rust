@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use crate::constantes;
 use crate::constantes::{COLLECTION_RECEPTION_NOM, COLLECTION_USAGERS_NOM, DOMAINE_NOM};
 use crate::domaine_messages::GestionnaireDomaineMessages;
-use crate::transactions::{TransactionMarquerLu, TransactionRecevoirMessage, TransactionSupprimerMessage};
+use crate::transactions::{FichierMessage, TransactionMarquerLu, TransactionRecevoirMessage, TransactionSupprimerMessage};
 
 pub async fn consommer_commande<M>(gestionnaire: &GestionnaireDomaineMessages, middleware: &M, message: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
@@ -249,7 +249,14 @@ async fn sauvegarder_message<M,S,K>(gestionnaire: &GestionnaireDomaineMessages, 
 
     let user_id = user_id.to_string();
 
-    let transaction_message = TransactionRecevoirMessage::new(&user_id, message_chiffre);
+    let fichiers = match &message.fichiers {
+        Some(inner) => {
+            Some(inner.iter().map(|f| f.into()).collect())
+        },
+        None => None
+    };
+
+    let transaction_message = TransactionRecevoirMessage::new(&user_id, message_chiffre, fichiers);
     let (_, message_id) = sauvegarder_traiter_transaction_serializable_v2(middleware, &transaction_message, gestionnaire,
         DOMAINE_NOM, constantes::COMMANDE_POSTER_V1).await?;
 
@@ -511,16 +518,17 @@ struct ReponseDechiffrageMessage {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct MessageFichierV1 {
-    fuuid: String,
-    nom: String,
-    mimetype: String,
-    date_fichier: Option<i64>,
-    taille_dechiffre: Option<i64>,
-    taille_chiffre: i64,
-    cle_id: String,
-    format: String,
-    nonce: Option<String>,
+pub struct MessageFichierV1 {
+    pub fuuid: String,
+    pub nom: String,
+    pub mimetype: String,
+    pub date_fichier: Option<i64>,
+    pub taille_dechiffre: Option<i64>,
+    pub taille_chiffre: i64,
+    pub cle_id: String,
+    pub format: String,
+    pub nonce: Option<String>,
+    pub verification: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

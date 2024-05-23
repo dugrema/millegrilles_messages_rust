@@ -2,6 +2,7 @@ pub const DOMAINE_NOM: &str = "Messages";
 pub const COLLECTION_NOM: &str = DOMAINE_NOM;
 
 pub const COLLECTION_RECEPTION_NOM: &str = "Messages/reception";
+pub const COLLECTION_FICHIERS_NOM: &str = "Messages/fichiers";
 pub const COLLECTION_USAGERS_NOM: &str = "Messages/usagers";
 
 pub const QUEUE_VOLATILS_NOM: &str = "Messages/volatils";

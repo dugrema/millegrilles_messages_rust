@@ -12,8 +12,9 @@ use millegrilles_common_rust::constantes as CommonConstantes;
 use millegrilles_common_rust::mongodb::options::UpdateOptions;
 
 use serde::{Deserialize, Serialize};
+use crate::commandes::MessageFichierV1;
 use crate::constantes;
-use crate::constantes::COLLECTION_RECEPTION_NOM;
+use crate::constantes::{COLLECTION_FICHIERS_NOM, COLLECTION_RECEPTION_NOM};
 
 use crate::domaine_messages::GestionnaireDomaineMessages;
 
@@ -45,17 +46,42 @@ pub async fn aiguillage_transaction<M, T>(gestionnaire: &GestionnaireDomaineMess
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct FichierMessage {
+    fuuid: String,
+    cle_id: String,
+    format: String,
+    #[serde(skip_serializing_if="Option::is_none")]
+    nonce: Option<String>,
+    #[serde(skip_serializing_if="Option::is_none")]
+    verification: Option<String>,
+}
+
+impl From<&MessageFichierV1> for FichierMessage {
+    fn from(value: &MessageFichierV1) -> Self {
+        Self {
+            fuuid: value.fuuid.clone(),
+            cle_id: value.cle_id.clone(),
+            format: value.format.clone(),
+            nonce: value.nonce.clone(),
+            verification: value.verification.clone(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct TransactionRecevoirMessage {
     user_id: String,
     message: DataChiffre,
+    #[serde(skip_serializing_if="Option::is_none")]
+    fichiers: Option<Vec<FichierMessage>>,
     version: u16,
 }
 
 impl TransactionRecevoirMessage {
-    pub fn new<S>(user_id: S, message: DataChiffre) -> Self
+    pub fn new<S>(user_id: S, message: DataChiffre, fichiers: Option<Vec<FichierMessage>>) -> Self
         where S: ToString
     {
-        Self { user_id: user_id.to_string(), message, version: constantes::VERSION_TRANSACTION_MESSAGE_1 }
+        Self { user_id: user_id.to_string(), message, fichiers, version: constantes::VERSION_TRANSACTION_MESSAGE_1 }
     }
 }
 
@@ -83,6 +109,24 @@ async fn transaction_poster_v1<M>(_gestionnaire: &GestionnaireDomaineMessages, m
     let collection = middleware.get_collection(COLLECTION_RECEPTION_NOM)?;
     let options = UpdateOptions::builder().upsert(true).build();
     collection.update_one(filtre, ops, options).await?;
+
+    if let Some(fichiers) = message_recu.fichiers {
+        for fichier in fichiers {
+            let filtre = doc!{"user_id": &user_id, "message_id": &message_id, "fuuid": fichier.fuuid, "cle_id": fichier.cle_id};
+            let ops = doc!{
+                "$setOnInsert": {
+                    "nonce": fichier.nonce,
+                    "format": fichier.format,
+                    "verification": fichier.verification,
+                    CommonConstantes::CHAMP_CREATION: Utc::now()
+                },
+                "$currentDate": {CommonConstantes::CHAMP_MODIFICATION: true}
+            };
+            let collection = middleware.get_collection(COLLECTION_FICHIERS_NOM)?;
+            let options = UpdateOptions::builder().upsert(true).build();
+            collection.update_one(filtre, ops, options).await?;
+        }
+    }
 
     Ok(None)
 }
@@ -112,7 +156,7 @@ async fn transaction_marquer_lu<M>(_gestionnaire: &GestionnaireDomaineMessages, 
         "$currentDate": {CommonConstantes::CHAMP_MODIFICATION: true},
     };
     let collection = middleware.get_collection(COLLECTION_RECEPTION_NOM)?;
-    collection.update_one(filtre, ops, None).await?;
+    collection.update_many(filtre, ops, None).await?;
 
     Ok(None)
 }
@@ -138,7 +182,7 @@ async fn transaction_supprimer_message<M>(_gestionnaire: &GestionnaireDomaineMes
     // Verifier que l'usager a acces au message et qu'il n'a pas deja lu==true
     let filtre = doc!{constantes::CHAMP_USER_ID: &user_id, constantes::CHAMP_MESSAGE_ID: {"$in": &message_ids}};
     let collection = middleware.get_collection(COLLECTION_RECEPTION_NOM)?;
-    collection.delete_one(filtre, None).await?;
+    collection.delete_many(filtre, None).await?;
 
     Ok(None)
 }

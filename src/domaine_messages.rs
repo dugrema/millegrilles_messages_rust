@@ -23,7 +23,7 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use crate::commandes::consommer_commande;
 use crate::config_ressources::{preparer_index_mongodb_messages, preparer_queues};
 use crate::constantes as Constantes;
-use crate::constantes::{COLLECTION_NOM, COLLECTION_RECEPTION_NOM, COLLECTION_USAGERS_NOM, DOMAINE_NOM};
+use crate::constantes::{COLLECTION_FICHIERS_NOM, COLLECTION_NOM, COLLECTION_RECEPTION_NOM, COLLECTION_USAGERS_NOM, DOMAINE_NOM};
 use crate::evenements::consommer_evenement;
 use crate::requetes::consommer_requete;
 use crate::transactions::aiguillage_transaction;
@@ -145,6 +145,7 @@ impl GestionnaireDomaineV2 for GestionnaireDomaineMessages {
         Ok(vec![
             COLLECTION_RECEPTION_NOM.to_string(),
             COLLECTION_USAGERS_NOM.to_string(),
+            COLLECTION_FICHIERS_NOM.to_string(),
         ])
     }
 }

@@ -20,7 +20,7 @@ use millegrilles_common_rust::mongodb::options::FindOptions;
 
 use serde::{Deserialize, Serialize};
 use crate::constantes;
-use crate::constantes::{COLLECTION_RECEPTION_NOM, DOMAINE_NOM};
+use crate::constantes::{COLLECTION_FICHIERS_NOM, COLLECTION_RECEPTION_NOM, DOMAINE_NOM};
 use crate::domaine_messages::GestionnaireDomaineMessages;
 use crate::structures_messages::{MessageDb, MessageDbRef};
 
@@ -235,7 +235,8 @@ async fn requete_messages_par_ids<M>(gestionnaire: &GestionnaireDomaineMessages,
 
 #[derive(Deserialize)]
 struct RequeteDechiffrerCles {
-    cle_ids: Vec<String>
+    cle_ids: Vec<String>,
+    cles_fichiers: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -247,6 +248,13 @@ struct MetadataChiffre<'a> {
 struct MessageCle<'a> {
     message_id: &'a str,
     message: MetadataChiffre<'a>
+}
+
+#[derive(Deserialize)]
+struct FichierCle<'a> {
+    message_id: &'a str,
+    fuuid: &'a str,
+    cle_id: &'a str,
 }
 
 async fn requete_dechiffrer_cles<M>(gestionnaire: &GestionnaireDomaineMessages, middleware: &M, message: MessageValide)
@@ -280,13 +288,24 @@ async fn requete_dechiffrer_cles<M>(gestionnaire: &GestionnaireDomaineMessages, 
     // S'assurer que l'usager a acces au cles demandees
     let mut cles = HashSet::new();
 
-    let filtre = doc!{"user_id": &user_id, "message.cle_id": {"$in": &requete.cle_ids}};
-    let collection = middleware.get_collection_typed::<MessageCle>(COLLECTION_RECEPTION_NOM)?;
-    let options = FindOptions::builder().projection(doc!("message_id": 1, "message.cle_id": 1)).build();
-    let mut curseur = collection.find(filtre, options).await?;
-    while curseur.advance().await? {
-        let row = curseur.deserialize_current()?;
-        cles.insert(row.message.cle_id.to_string());
+    if let Some(true) = requete.cles_fichiers {
+        let filtre = doc!{"user_id": &user_id, "cle_id": {"$in": &requete.cle_ids}};
+        let collection = middleware.get_collection_typed::<FichierCle>(COLLECTION_FICHIERS_NOM)?;
+        let options = FindOptions::builder().projection(doc!("message_id": 1, "fuuid": 1, "cle_id": 1)).build();
+        let mut curseur = collection.find(filtre, options).await?;
+        while curseur.advance().await? {
+            let row = curseur.deserialize_current()?;
+            cles.insert(row.cle_id.to_string());
+        }
+    } else {
+        let filtre = doc!{"user_id": &user_id, "message.cle_id": {"$in": &requete.cle_ids}};
+        let collection = middleware.get_collection_typed::<MessageCle>(COLLECTION_RECEPTION_NOM)?;
+        let options = FindOptions::builder().projection(doc!("message_id": 1, "message.cle_id": 1)).build();
+        let mut curseur = collection.find(filtre, options).await?;
+        while curseur.advance().await? {
+            let row = curseur.deserialize_current()?;
+            cles.insert(row.message.cle_id.to_string());
+        }
     }
 
     if cles.len() > 0 {
