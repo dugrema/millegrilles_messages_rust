@@ -7,12 +7,12 @@ use millegrilles_common_rust::base64::{Engine as _, engine::general_purpose::STA
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chiffrage_cle::CommandeAjouterCleDomaine;
-use millegrilles_common_rust::chrono::{DateTime, Utc};
+use millegrilles_common_rust::chrono::{DateTime, Duration, Utc};
 use millegrilles_common_rust::common_messages::{ReponseRequeteDechiffrageV2, RequeteDechiffrage};
-use millegrilles_common_rust::constantes::{COMMANDE_AJOUTER_CLE_DOMAINES, DELEGATION_GLOBALE_PROPRIETAIRE, DOMAINE_NOM_MAITREDESCLES, DOMAINE_NOM_MAITREDESCOMPTES, MAITREDESCLES_REQUETE_DECHIFFRAGE_MESSAGE, MAITREDESCLES_REQUETE_DECHIFFRAGE_V2, RolesCertificats, Securite};
+use millegrilles_common_rust::constantes::{COMMANDE_ACTIVITE_FUUIDS, COMMANDE_AJOUTER_CLE_DOMAINES, DELEGATION_GLOBALE_PROPRIETAIRE, DOMAINE_FICHIERS, DOMAINE_NOM_MAITREDESCLES, DOMAINE_NOM_MAITREDESCOMPTES, MAITREDESCLES_REQUETE_DECHIFFRAGE_MESSAGE, MAITREDESCLES_REQUETE_DECHIFFRAGE_V2, RolesCertificats, Securite};
 use millegrilles_common_rust::dechiffrage::DataChiffre;
 use millegrilles_common_rust::error::Error;
-use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse};
 use millegrilles_common_rust::messages_generiques::ReponseCommande;
 use millegrilles_common_rust::middleware::{sauvegarder_traiter_transaction_serializable_v2, sauvegarder_traiter_transaction_v2};
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::{Cipher, CleChiffrageHandler};
@@ -23,14 +23,16 @@ use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::opti
 use millegrilles_common_rust::millegrilles_cryptographie::x25519::CleSecreteX25519;
 use millegrilles_common_rust::millegrilles_cryptographie::x509::EnveloppeCertificat;
 use millegrilles_common_rust::mongo_dao::{MongoDao, opt_chrono_datetime_as_bson_datetime};
-use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, ReturnDocument};
+use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOptions, ReturnDocument};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
+use millegrilles_common_rust::serde_json::json;
 use millegrilles_common_rust::tokio_stream::StreamExt;
+use millegrilles_common_rust::tokio::time as tokio_time;
 use serde::{Deserialize, Serialize};
 
 use crate::constantes;
-use crate::constantes::{COLLECTION_RECEPTION_NOM, COLLECTION_USAGERS_NOM, DOMAINE_NOM};
+use crate::constantes::{COLLECTION_FICHIERS_NOM, COLLECTION_RECEPTION_NOM, COLLECTION_USAGERS_NOM, DOMAINE_NOM};
 use crate::domaine_messages::GestionnaireDomaineMessages;
 use crate::transactions::{FichierMessage, TransactionMarquerLu, TransactionRecevoirMessage, TransactionSupprimerMessage};
 
@@ -51,6 +53,7 @@ pub async fn consommer_commande<M>(gestionnaire: &GestionnaireDomaineMessages, m
         constantes::COMMANDE_POSTER_V1 => commande_poster_v1(gestionnaire, middleware, message).await,
         constantes::COMMANDE_MARQUER_LU => commande_marquer_lu(gestionnaire, middleware, message).await,
         constantes::COMMANDE_SUPPRIMER_MESSAGE => commande_supprimer_message(gestionnaire, middleware, message).await,
+        constantes::COMMANDE_RECLAMER_FUUIDS => commande_reclamer_fuuids(gestionnaire, middleware, message).await,
         // Commande inconnue
         _ => Err(Error::String(format!("consommer_commande: Commande {} inconnue, **DROPPED**\n{}",
                                        action, from_utf8(message.message.buffer.as_slice())?)))?,
@@ -635,4 +638,96 @@ async fn commande_supprimer_message<M>(gestionnaire: &GestionnaireDomaineMessage
     } else {
         Ok(Some(middleware.reponse_err(404, None, Some("Message id inconnu ou n'appartient pas a l'usager"))?))
     }
+}
+
+#[derive(Deserialize)]
+pub struct FichierMessageReclamation {
+    fuuid: String,
+}
+
+pub const LIMITE_FUUIDS_BATCH: usize = 10000;
+
+pub async fn commande_reclamer_fuuids<M>(gestionnaire: &GestionnaireDomaineMessages, middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+    where M: GenerateurMessages + MongoDao
+{
+    if !message.certificat.verifier_exchanges(vec![Securite::L2Prive])? {
+        error!("evenement_fichiers_syncpret Acces refuse, certificat n'est pas d'un exchange L2");
+        return Ok(None)
+    }
+    if !message.certificat.verifier_roles(vec![RolesCertificats::Fichiers])? {
+        error!("evenement_fichiers_syncpret Acces refuse, certificat n'est pas de role fichiers");
+        return Ok(None)
+    }
+
+    // Repondre immediatement pour declencher sync
+    {
+        match message.type_message {
+            TypeMessageOut::Commande(r) |
+            TypeMessageOut::Evenement(r) => {
+                let reponse = json!({ "ok": true });
+                if let Some(correlation_id) = r.correlation_id.as_ref() {
+                    if let Some(reply_q) = r.reply_to.as_ref() {
+                        let routage = RoutageMessageReponse::new(reply_q, correlation_id);
+                        middleware.repondre(routage, reponse).await?;
+                    }
+                }
+            },
+            _ => error!("evenement_fichiers_syncpret Mauvais type message, devrait etre commande/evenement")
+        }
+    }
+
+    let collection = middleware.get_collection_typed::<FichierMessageReclamation>(
+        COLLECTION_FICHIERS_NOM)?;
+
+    let mut fichiers_actifs: HashSet<String> = HashSet::with_capacity(10000);
+
+    let projection = doc!{"fuuid": 1};
+    let options = FindOptions::builder().projection(projection).build();
+    let filtre = doc! {};
+    let mut curseur = collection.find(filtre, Some(options)).await?;
+    let mut total = 0 as i64;
+    while curseur.advance().await? {
+        let info_fichier = curseur.deserialize_current()?;
+        // let info_fichier: RowFichiersSyncpret = convertir_bson_deserializable(f?)?;
+        total += 1;
+        // fichiers_actifs.extend(info_fichier.fuuids_reclames.into_iter().map(|s| s.to_owned()));
+        fichiers_actifs.insert(info_fichier.fuuid);
+
+        if fichiers_actifs.len() >= LIMITE_FUUIDS_BATCH {
+            let fichiers_actifs_vec: Vec<String> = fichiers_actifs.drain().collect();
+            transmettre_fuuids_fichiers(middleware, &fichiers_actifs_vec, false, false, None).await?;
+            fichiers_actifs.clear();
+            tokio_time::sleep(tokio_time::Duration::from_millis(500)).await;
+        }
+    }
+
+    if ! fichiers_actifs.is_empty() {
+        let fichiers_actifs_vec: Vec<String> = fichiers_actifs.drain().collect();
+        transmettre_fuuids_fichiers(middleware, &fichiers_actifs_vec, false, false, Some(total.clone())).await?;
+    }
+
+    // Transmettre message avec flag termine dans tous les cas
+    transmettre_fuuids_fichiers(middleware, &vec![], false, true, Some(total)).await?;
+
+    debug!("evenement_fichiers_syncpret Transmis {} confirmations de fichiers durant sync", total);
+
+    Ok(None)
+}
+
+async fn transmettre_fuuids_fichiers<M>(middleware: &M, fuuids: &Vec<String>, archive: bool, termine: bool, total: Option<i64>)
+                                        -> Result<(), Error>
+    where M: GenerateurMessages + MongoDao,
+{
+    let confirmation = doc! {
+        "fuuids": fuuids,
+        "archive": archive,
+        "termine": termine,
+        "total": total,
+    };
+    let routage = RoutageMessageAction::builder(DOMAINE_FICHIERS, COMMANDE_ACTIVITE_FUUIDS, vec![Securite::L2Prive])
+        .blocking(false)
+        .build();
+    middleware.transmettre_commande(routage, &confirmation).await?;
+    Ok(())
 }

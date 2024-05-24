@@ -148,6 +148,10 @@ impl GestionnaireDomaineV2 for GestionnaireDomaineMessages {
             COLLECTION_FICHIERS_NOM.to_string(),
         ])
     }
+
+    fn reclame_fuuids(&self) -> bool {
+        true
+    }
 }
 
 impl GestionnaireBusMillegrilles for GestionnaireDomaineMessages {
