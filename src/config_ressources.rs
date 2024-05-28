@@ -1,14 +1,10 @@
 use millegrilles_common_rust::configuration::ConfigMessages;
 use millegrilles_common_rust::constantes::{DEFAULT_Q_TTL, Securite, DOMAINE_FICHIERS};
 use millegrilles_common_rust::error::Error;
-use millegrilles_common_rust::mongo_dao::MongoDao;
+use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType};
 
-use crate::constantes::{
-    COMMANDE_ASSOCIER_IMAGES, COMMANDE_ASSOCIER_VIDEOS, COMMANDE_MARQUER_LU, COMMANDE_POSTER_V1, COMMANDE_SUPPRIMER_MESSAGE,
-    DOMAINE_NOM, QUEUE_VOLATILS_NOM, REQUETE_DECHIFFRER_CLES, REQUETE_MESSAGES_PAR_IDS, REQUETE_RECLAMATIONS, REQUETE_SYNC_MESSAGES,
-    COMMANDE_RECLAMER_FUUIDS,
-};
+use crate::constantes::{COMMANDE_ASSOCIER_IMAGES, COMMANDE_ASSOCIER_VIDEOS, COMMANDE_MARQUER_LU, COMMANDE_POSTER_V1, COMMANDE_SUPPRIMER_MESSAGE, DOMAINE_NOM, QUEUE_VOLATILS_NOM, REQUETE_DECHIFFRER_CLES, REQUETE_MESSAGES_PAR_IDS, REQUETE_RECLAMATIONS, REQUETE_SYNC_MESSAGES, COMMANDE_RECLAMER_FUUIDS, COLLECTION_USAGERS_NOM, COLLECTION_FICHIERS_NOM, COLLECTION_RECEPTION_NOM};
 
 use crate::domaine_messages::GestionnaireDomaineMessages;
 
@@ -54,19 +50,62 @@ pub fn preparer_queues() -> Vec<QueueType> {
 pub async fn preparer_index_mongodb_messages<M>(middleware: &M, gestionnaire: &GestionnaireDomaineMessages) -> Result<(), Error>
     where M: MongoDao + ConfigMessages
 {
-    // let options_cle_id = IndexOptions {
-    //     nom_index: Some(String::from(INDEX_CLE_ID)),
-    //     unique: true,
-    // };
-    // let champs_index_cle_id = vec!(
-    //     ChampIndex {nom_champ: String::from(CHAMP_CLE_ID), direction: 1},
-    // );
-    // middleware.create_index(
-    //     middleware,
-    //     nom_collection_cles,
-    //     champs_index_cle_id,
-    //     Some(options_cle_id)
-    // ).await?;
+    let options_usagers = IndexOptions {
+        nom_index: Some(String::from("user_id")),
+        unique: true,
+    };
+    let champs_index_usagers = vec!(
+        ChampIndex {nom_champ: String::from("user_id"), direction: 1},
+    );
+    middleware.create_index(
+        middleware,
+        COLLECTION_USAGERS_NOM,
+        champs_index_usagers,
+        Some(options_usagers)
+    ).await?;
+
+    let options_fichiers = IndexOptions {
+        nom_index: Some(String::from("message_fuuid_id")),
+        unique: true,
+    };
+    let champs_index_fichiers = vec!(
+        ChampIndex {nom_champ: String::from("message_id"), direction: 1},
+        ChampIndex {nom_champ: String::from("fuuid"), direction: 1},
+    );
+    middleware.create_index(
+        middleware,
+        COLLECTION_FICHIERS_NOM,
+        champs_index_fichiers,
+        Some(options_fichiers)
+    ).await?;
+
+    let options_reception_message_id = IndexOptions {
+        nom_index: Some(String::from("message_id")),
+        unique: true,
+    };
+    let champs_index_reception_message_id = vec!(
+        ChampIndex {nom_champ: String::from("message_id"), direction: 1},
+    );
+    middleware.create_index(
+        middleware,
+        COLLECTION_RECEPTION_NOM,
+        champs_index_reception_message_id,
+        Some(options_reception_message_id)
+    ).await?;
+
+    let options_reception_user_id = IndexOptions {
+        nom_index: Some(String::from("user_id")),
+        unique: false,
+    };
+    let champs_index_reception_user_id = vec!(
+        ChampIndex {nom_champ: String::from("user_id"), direction: 1},
+    );
+    middleware.create_index(
+        middleware,
+        COLLECTION_RECEPTION_NOM,
+        champs_index_reception_user_id,
+        Some(options_reception_user_id)
+    ).await?;
 
     Ok(())
 }
