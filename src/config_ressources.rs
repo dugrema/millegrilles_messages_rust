@@ -1,5 +1,5 @@
 use millegrilles_common_rust::configuration::ConfigMessages;
-use millegrilles_common_rust::constantes::{DEFAULT_Q_TTL, Securite, DOMAINE_FICHIERS};
+use millegrilles_common_rust::constantes::{DEFAULT_Q_TTL, Securite};
 use millegrilles_common_rust::error::Error;
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType};
@@ -47,7 +47,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     queues
 }
 
-pub async fn preparer_index_mongodb_messages<M>(middleware: &M, gestionnaire: &GestionnaireDomaineMessages) -> Result<(), Error>
+pub async fn preparer_index_mongodb_messages<M>(middleware: &M, _gestionnaire: &GestionnaireDomaineMessages) -> Result<(), Error>
     where M: MongoDao + ConfigMessages
 {
     let options_usagers = IndexOptions {

@@ -7,7 +7,7 @@ use millegrilles_common_rust::base64::{Engine as _, engine::general_purpose::STA
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chiffrage_cle::CommandeAjouterCleDomaine;
-use millegrilles_common_rust::chrono::{DateTime, Duration, Utc};
+use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::common_messages::{ReponseRequeteDechiffrageV2, RequeteDechiffrage};
 use millegrilles_common_rust::constantes::{COMMANDE_ACTIVITE_FUUIDS, COMMANDE_AJOUTER_CLE_DOMAINES, DELEGATION_GLOBALE_PROPRIETAIRE, DOMAINE_FICHIERS, DOMAINE_NOM_MAITREDESCLES, DOMAINE_NOM_MAITREDESCOMPTES, MAITREDESCLES_REQUETE_DECHIFFRAGE_MESSAGE, MAITREDESCLES_REQUETE_DECHIFFRAGE_V2, RolesCertificats, Securite};
 use millegrilles_common_rust::dechiffrage::DataChiffre;
@@ -22,7 +22,7 @@ use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::Mess
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::optionepochseconds;
 use millegrilles_common_rust::millegrilles_cryptographie::x25519::CleSecreteX25519;
 use millegrilles_common_rust::millegrilles_cryptographie::x509::EnveloppeCertificat;
-use millegrilles_common_rust::mongo_dao::{MongoDao, opt_chrono_datetime_as_bson_datetime};
+use millegrilles_common_rust::mongo_dao::MongoDao;
 use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOptions, ReturnDocument};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use crate::constantes;
 use crate::constantes::{COLLECTION_FICHIERS_NOM, COLLECTION_RECEPTION_NOM, COLLECTION_USAGERS_NOM, DOMAINE_NOM};
 use crate::domaine_messages::GestionnaireDomaineMessages;
-use crate::transactions::{FichierMessage, TransactionMarquerLu, TransactionRecevoirMessage, TransactionSupprimerMessage};
+use crate::transactions::{TransactionMarquerLu, TransactionRecevoirMessage, TransactionSupprimerMessage};
 
 pub async fn consommer_commande<M>(gestionnaire: &GestionnaireDomaineMessages, middleware: &M, message: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
@@ -117,11 +117,11 @@ async fn commande_poster_v1<M>(gestionnaire: &GestionnaireDomaineMessages, middl
     let fingerprint = enveloppe_signature.fingerprint()?;
 
     let cle_dechiffrage = match cles.get(fingerprint.as_str()) {
-        Some(inner) => {
-            let mut cle_buffer = [0u8;32];
+        Some(_inner) => {
             todo!("Dechiffrer cle");
+            //let mut cle_buffer = [0u8;32];
             // cle_buffer.copy_from_slice(&cle_secrete[0..32]);
-            CleSecreteX25519 {0: cle_buffer}
+            //CleSecreteX25519 {0: cle_buffer}
         },
         None => {
             debug!("commande_poster_v1 Cle locale non presente dans dechiffrage, faire une requete de dechiffrage aupres du maitre des cles");
@@ -515,8 +515,8 @@ async fn find_usagers_messages<M,S>(middleware: &M, usagers: FiltreUsagerChamp<S
 
 #[derive(Debug, Deserialize)]
 struct ReponseDechiffrageMessage {
-    ok: bool,
-    err: Option<String>,
+    // ok: bool,
+    // err: Option<String>,
     cle_secrete_base64: Option<String>,
 }
 
@@ -647,7 +647,7 @@ pub struct FichierMessageReclamation {
 
 pub const LIMITE_FUUIDS_BATCH: usize = 10000;
 
-pub async fn commande_reclamer_fuuids<M>(gestionnaire: &GestionnaireDomaineMessages, middleware: &M, message: MessageValide)
+pub async fn commande_reclamer_fuuids<M>(_gestionnaire: &GestionnaireDomaineMessages, middleware: &M, message: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: GenerateurMessages + MongoDao
 {

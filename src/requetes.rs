@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::str::from_utf8;
 use log::{debug, error};
 use millegrilles_common_rust::bson::{Bson, doc};
-use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
+use millegrilles_common_rust::certificats::VerificateurPermissions;
 use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::common_messages::RequeteDechiffrage;
 use millegrilles_common_rust::constantes::{DELEGATION_GLOBALE_PROPRIETAIRE, RolesCertificats, Securite, CHAMP_MODIFICATION, CHAMP_CREATION, DOMAINE_NOM_MAITREDESCLES, MAITREDESCLES_REQUETE_DECHIFFRAGE_V2};
@@ -10,7 +10,6 @@ use millegrilles_common_rust::dechiffrage::DataChiffre;
 use millegrilles_common_rust::error::Error;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::middleware::MiddlewareMessages;
-use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
 use millegrilles_common_rust::mongo_dao::MongoDao;
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
@@ -112,7 +111,7 @@ struct RequeteSyncMessages {
     limit: Option<i64>,
 }
 
-async fn requete_sync_messages<M>(gestionnaire: &GestionnaireDomaineMessages, middleware: &M, message: MessageValide)
+async fn requete_sync_messages<M>(_gestionnaire: &GestionnaireDomaineMessages, middleware: &M, message: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: GenerateurMessages + MongoDao
 {
@@ -205,7 +204,7 @@ struct ReponseMessagesParIds {
     messages: Vec<MessageReponse>,
 }
 
-async fn requete_messages_par_ids<M>(gestionnaire: &GestionnaireDomaineMessages, middleware: &M, message: MessageValide)
+async fn requete_messages_par_ids<M>(_gestionnaire: &GestionnaireDomaineMessages, middleware: &M, message: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: GenerateurMessages + MongoDao
 {
@@ -246,19 +245,20 @@ struct MetadataChiffre<'a> {
 
 #[derive(Deserialize)]
 struct MessageCle<'a> {
-    message_id: &'a str,
+    // message_id: &'a str,
+    #[serde(borrow)]
     message: MetadataChiffre<'a>
 }
 
 #[derive(Deserialize)]
 struct FichierCle<'a> {
-    message_id: &'a str,
-    fuuid: &'a str,
+    // message_id: &'a str,
+    // fuuid: &'a str,
     cle_id: &'a str,
 }
 
-async fn requete_dechiffrer_cles<M>(gestionnaire: &GestionnaireDomaineMessages, middleware: &M, message: MessageValide)
-                                     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+async fn requete_dechiffrer_cles<M>(_gestionnaire: &GestionnaireDomaineMessages, middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: GenerateurMessages + MongoDao
 {
     debug!("requete_dechiffrer_cles Message recu {:?}\n{}", message.type_message, from_utf8(message.message.buffer.as_slice())?);
